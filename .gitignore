@@ -1,0 +1,6 @@
+# PyCharm project folders
+.idea/
+
+# submeter-bill-generator result folders
+Bills/
+Charts/
