@@ -20,7 +20,7 @@ selected billing period.
 
 from os import environ, makedirs, listdir, rmdir
 from os.path import exists, abspath
-from subprocess import Popen
+from subprocess import run
 
 from collections import OrderedDict
 from decimal import Decimal, getcontext, ROUND_HALF_EVEN
@@ -28,13 +28,11 @@ from datetime import datetime
 from textwrap import fill, wrap
 
 from tkinter import *
-from tkinter import filedialog
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from tkinter.ttk import *
 
-import pypandoc
-from mailmerge import MailMerge
 from openpyxl import load_workbook
+from docxtpl import DocxTemplate, InlineImage
 
 from matplotlib import use, rcParams
 use("Agg")
@@ -49,23 +47,23 @@ getcontext().rounding = ROUND_HALF_EVEN  # so it's not locale-specific
 rcParams.update({'xtick.labelsize': 'small',
                  'figure.dpi': 150.0,
                  'figure.figsize': [8/3, 2.0]})
-# pyplot.autoscale(False)
 
 
 class Tenant:
-    def __init__(self, unit_no, document):
+    def __init__(self, unit_no, document, context):
         self.unit_no = unit_no
         self.document = document
+        self.context = context.copy()  # shallow copy is enough (no mutable values)
         self.chart_path = "{}/unit_{}_history.png".format(CHARTS_DIR, self.unit_no)
         self.bill_path = "{}/unit_{}_{}_bill.docx".format(
             BILLS_DIR, self.unit_no, BILLS_DIR[6:])  # formatted period-name
+
         self.four_recent_bills = []  # type: [Decimal]
-        self.current_reading = self.prev_reading = Decimal('0.00')
-        self.name = self.account_no = self.meter_no = self.service_addr = None
-        self.billing_addr = self.billing_city = None
-        self.billing_prov = self.billing_postal = None
-        self.prev_balance = self.consumption_total = self.amount_due = Decimal('0.00')
+
+        self.context['CRead'] = self.context['PRead'] = None
+
         # prev_balance left at 0 for now, can be used later
+        self.context['PrevBalance'] = Decimal(0.00)
 
     def get_addr_info(self, row):
         """
@@ -75,47 +73,46 @@ class Tenant:
         :param List[Cell] row: this tenant's row in the TenantInfo sheet
         :return: None
         """
-        self.meter_no = str(row[1].value)
-        self.name = row[2].value
-        self.account_no = '-'  # not used right now, but needed for template
-        self.service_addr = row[3].value
-        self.billing_addr = row[7].value
-        self.billing_city = row[8].value
-        self.billing_prov = row[9].value
-        self.billing_postal = row[10].value
+        self.context['MeterNo'] = str(row[1].value)
+        self.context['Name'] = row[2].value
+        self.context['AccountNo'] = '-'  # not used right now, but needed for template
+        self.context['ServiceAddr'] = row[3].value
+        self.context['BillingAddr'] = row[7].value
+        self.context['BillingCity'] = row[8].value
+        self.context['BillingProv'] = row[9].value
+        self.context['BillingPostal'] = row[10].value
 
-    def calculate_bills(self, row, index, rate):
+    def calculate_bills(self, row, index):
         """
         Calculates the current bill and up to 3 previous bills
         for this tenant.
 
         :param List[Cell] row: the Excel row for this tenant
         :param int index: the index to the current period to calculate
-        :param str rate: the current month's billing rate (as a string)
         :return: None
         """
-        print([c.value for c in row])
-        self.current_reading = str(row[index].value)
-        self.prev_reading = str(row[index - 1].value)
-        self.four_recent_bills.append(Decimal(self.current_reading) -
-                                      Decimal(self.prev_reading))
-        print(rate, type(rate))
-        self.consumption_total = Decimal(self.four_recent_bills[0] *
-                                         Decimal(rate))
-        self.amount_due = str(round(self.prev_balance + self.consumption_total))
-        self.consumption_total = str(round(self.consumption_total))
+        self.context['CRead'] = _stround(row[index].value)
+        self.context['PRead'] = _stround(row[index - 1].value)
+        self.four_recent_bills.append(Decimal(self.context['CRead']) -
+                                      Decimal(self.context['PRead']))
+        self.context['Cons'] = Decimal(self.four_recent_bills[0] *
+                                       self.context['Rate'])
+        self.context['TotalDue'] = _stround(self.context['PrevBalance'] +
+                                            self.context['Cons'])
+        # Normalise to strings
+        self.context['Cons'] = _stround(self.context['Cons'])
+        self.context['PrevBalance'] = _stround(self.context['PrevBalance'])
+        self.context['Rate'] = _stround(self.context['Rate'])
+        self.context['AmCons'] = _stround(self.four_recent_bills[0])
 
         count = 0
-        # print("calculating bills:")
         while count < 3 and index > 2:
             index -= 1
             count += 1
-            # print(index, count)
             self.four_recent_bills.append(
                 Decimal(row[index].value) - Decimal(row[index - 1].value))
         while count < 3:
             count += 1
-            # print(count)
             self.four_recent_bills.append(0)
 
     def generate_chart(self, index, periods):
@@ -137,14 +134,12 @@ class Tenant:
                 if height > 0:
                     label_position = height + (y_height * 0.05)
                     axes.text(rect.get_x() + rect.get_width() / 2.,
-                              label_position, str(round(height, 2)),
+                              label_position, str(int(height)),
                               ha='center', va='bottom')
 
         bills = [round(b) for b in self.four_recent_bills[::-1]]  # reverse
-        print(bills)
         rng = range(4)
         fig, ax = pyplot.subplots()  # type: Figure, Axes
-        # ax.set_autoscaley_on(False)
 
         ax.set_xticks(rng)
         labels = []
@@ -165,61 +160,14 @@ class Tenant:
         chart = ax.bar(rng, bills, 1/1.5, color="blue")
         chart[3].set_color("cyan")
         autolabel(chart, ax)
-        # fig.tight_layout()
         fig.subplots_adjust(bottom=0.4)
-        # print(rcParams['figure.subplot.bottom'])
-        # print("ylim:", pyplot.ylim())
-        # print("fig extent:", fig.get_window_extent())
-        # print("ax extent:", ax.get_window_extent())
         fig.savefig(self.chart_path)
-        # fig.show()
         pyplot.close(fig)
 
-    def generate_bill(self, start, end, days, rate, due_date):
-        # d = dict(Name=self.name,
-        #          AccountNo=self.account_no,
-        #          MeterNo=self.meter_no,
-        #          ServiceAddr=self.service_addr,
-        #          BillingAddr=self.billing_addr,
-        #          BillingCity=self.billing_city,
-        #          BillingProv=self.billing_prov,
-        #          BillingPostal=self.billing_postal,
-        #          StartDate=start,
-        #          EndDate=end,
-        #          NumberDays=days,
-        #          PrevReading=self.prev_reading,
-        #          CurrentReading=self.current_reading,
-        #          AmountConsumed=str(self.four_recent_bills[0]),  # in m^3
-        #          DueDate=due_date,
-        #          ServiceRate=rate,
-        #          PrevBalance=str(self.prev_balance),
-        #          TotalConsumption=self.consumption_total,  # in $
-        #          TotalDue=self.amount_due)
-        # print("Non-strings:")
-        # for x in d:
-        #     if not isinstance(d[x], str):
-        #         print(x)
-        self.document.merge(Name=self.name,
-                            AccountNo=self.account_no,
-                            MeterNo=self.meter_no,
-                            ServiceAddr=self.service_addr,
-                            BillingAddr=self.billing_addr,
-                            BillingCity=self.billing_city,
-                            BillingProv=self.billing_prov,
-                            BillingPostal=self.billing_postal,
-                            StartDate=start,
-                            EndDate=end,
-                            NumberDays=days,
-                            PrevReading=self.prev_reading,
-                            CurrentReading=self.current_reading,
-                            AmountConsumed=str(self.four_recent_bills[0]),  # in m^3
-                            DueDate=due_date,
-                            ServiceRate=rate,
-                            PrevBalance=str(self.prev_balance),
-                            TotalConsumption=self.consumption_total,  # in $
-                            TotalDue=self.amount_due,
-                            ChartName=abspath(self.chart_path))
-        self.document.write(self.bill_path)
+    def generate_bill(self):
+        self.context['Chart'] = InlineImage(self.document, self.chart_path)
+        self.document.render(self.context)
+        self.document.save(self.bill_path)
 
 
 class BillGenerator(Tk):
@@ -228,10 +176,9 @@ class BillGenerator(Tk):
         self.title("Submeter Bill Generator")
 
         self.template = StringVar(self)
-        self.periods = self.period_index = self.data = self.contacts = \
-            self.start_date = self.end_date = self.no_days = \
-            self.rate = self.due_date = None
+        self.periods = self.period_index = self.data = self.contacts = None
         self.tenants = []
+        self.context = {}
 
         self.run()
 
@@ -254,6 +201,7 @@ class BillGenerator(Tk):
             ok_button.pack_forget()
             message.configure(text="Data file open and reading. "
                                    "Please wait.")
+            self.update_idletasks()
             wb = load_workbook(filename=datafile.get(), data_only=True)
             self.data = wb["DataEntry"]
             self.contacts = wb["TenantInfo"]
@@ -275,7 +223,6 @@ class BillGenerator(Tk):
             ok_button.pack(pady=10, padx=10)
 
         def select_period(*args):
-            print("start of select_period")
             self.period_index = self.periods[option.get()]
             if any(len(x) > 10 for x in wrap(option.get(), 10)):
                 messagebox.showwarning("Format Warning",
@@ -287,7 +234,6 @@ class BillGenerator(Tk):
                                        "with \nthe naming standard, or proceed "
                                        "with caution." % option.get(),
                                        parent=self)
-            print(self.period_index)
 
             # Add billing period to Charts and Bills folder names
             global CHARTS_DIR, BILLS_DIR
@@ -297,15 +243,12 @@ class BillGenerator(Tk):
             BILLS_DIR += '/' + option.get()
             BILLS_DIR = BILLS_DIR.replace('- ', '-').replace(' -', '-')
             BILLS_DIR = BILLS_DIR.replace(' ', '_')
-            print(CHARTS_DIR, BILLS_DIR)
 
             period_menu.grid_forget()
             message.configure(text="Please select a Word file to use\n"
                                    "as a template for the bills:")
             self.template.trace('w', use_template_file)
-            ok_button.configure(text="Choose File",
-                                     command=get_template_file)
-            print("end of select_period")
+            ok_button.configure(text="Choose File", command=get_template_file)
 
         def get_template_file(*args):
             fn = filedialog.askopenfilename(
@@ -321,42 +264,42 @@ class BillGenerator(Tk):
             ok_button.pack_forget()
             message.configure(text="Template file opened. Generating bills.\n"
                                    "Please wait, as this may take some time.")
+            self.update_idletasks()
             self.template = self.template.get()
+
+            # Do the actual generation
             get_period_info()
             initialise_tenants()
-            print(CHARTS_DIR, BILLS_DIR)
-            print("calling generate_charts")
             generate_charts()
-            print(self.tenants[0].document.get_merge_fields())
-            print("calling generate_bills")
             generate_bills()
+            generate_pdfs()
 
         def get_period_info():
             period = self.data[chr(ord('A') + self.period_index)]
             # Already datetime objects (thanks, openpyxl)
             # self.start_date = datetime.strptime(period[1].value, "%Y-%m-%d")
             # self.end_date = datetime.strptime(period[2].value, "%Y-%m-%d")
-            self.start_date = period[1].value  # type: datetime
-            self.start_date = self.start_date.strftime("%b %d/%y")  # Jan 31/17
-            self.end_date = period[2].value.strftime("%b %d/%y")
-            self.no_days = str(period[3].value)
-            self.rate = str(period[4].value)
-            self.due_date = period[5].value.strftime("%b %d/%y")
-            print(self.start_date, self.end_date, self.no_days, self.rate, self.due_date)
+            self.context['StartDate'] = period[1].value.strftime("%b %d/%y")  # Jan 31/17
+            self.context['EndDate'] = period[2].value.strftime("%b %d/%y")
+            self.context['NumDays'] = str(period[3].value)
+            self.context['Rate'] = Decimal(period[4].value)
+            self.context['DueDate'] = period[5].value.strftime("%b %d/%y")
 
         def initialise_tenants():
             for i, unit_row in enumerate(self.data.iter_rows(min_row=7)):
                 unit = unit_row[0].value
                 if unit is None:
                     break
-                t = Tenant(unit_no=str(unit), document=MailMerge(self.template))
+                t = Tenant(unit_no=str(unit),
+                           document=DocxTemplate(self.template),
+                           context=self.context)
                 contact_row = self.contacts[i+2]
                 assert contact_row[0].value == unit, \
                     "Mismatch in the tenant order of DataEntry and " \
                     "TenantInfo sheets ({} != {})".format(
                         contact_row[0].value, unit)
                 t.get_addr_info(contact_row)
-                t.calculate_bills(unit_row, self.period_index, self.rate)
+                t.calculate_bills(unit_row, self.period_index)
                 self.tenants.append(t)
 
         def generate_charts():
@@ -371,22 +314,30 @@ class BillGenerator(Tk):
                 "'{}' folder already exists.".format(BILLS_DIR)
             makedirs(BILLS_DIR)
             for tenant in self.tenants:
-                tenant.generate_bill(self.start_date, self.end_date,
-                                     self.no_days, self.rate, self.due_date)
-            print("done!")
-            close()
+                tenant.generate_bill()
 
-        def close():
+        def generate_pdfs():
+            # ok_button.pack_forget()
+            # exit_button.pack_forget()
+            # message.configure(text="Converting to PDFs. Please wait.")
+            # self.update_idletasks()
+            for tenant in self.tenants:
+                run(["wscript", "doc2pdf.vbs", tenant.bill_path])
+            # message.configure(text="Conversion complete! Press Exit to close.")
+            # exit_button.pack(padx=10, pady=10)
+            almost_close()
+
+        def almost_close():
             path = abspath(BILLS_DIR)
             message.configure(text="Bill generation complete!\n"
-                                   "Bills have been stored in %s.\n"
+                                   "Bills have been stored in \n%s.\n"
                                    "Press Open Folder to open this folder \n"
-                                   "in Explorer, or press Exit to close.")
+                                   "in Explorer. Press Exit to close." % path)
             ok_button.configure(text="Open Folder",
-                                command=lambda: Popen("explorer " + path))
+                                command=lambda: run("explorer " + path))
             exit_button.configure(command=lambda: self.quit())
-            exit_button.pack(padx=10, pady=10)
-            self.quit()
+            ok_button.pack(padx=10, pady=5)
+            exit_button.pack(padx=10, pady=5)
 
         # Add a grid
         mainframe = Frame(self)
@@ -403,6 +354,18 @@ class BillGenerator(Tk):
         datafile.trace('w', read_data_file)
         ok_button.pack(padx=10, pady=10)
 
+
+def _stround(num):
+    """
+    Round num to two decimal places and return as a string.
+
+    :type num: Decimal | Any
+    :return: str
+    """
+    if isinstance(num, Decimal):
+        return str(round(num, 2))
+    else:
+        return str(round(Decimal(num), 2))
 
 if __name__ == "__main__":
     try:
