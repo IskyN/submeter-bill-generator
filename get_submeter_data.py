@@ -60,23 +60,23 @@ def get_data(site_id, site_name, period=None):
 
     # Use 'with' to ensure the session context is closed after use.
     with Session() as session:
-        # response = session.post(site_url + login_url, data=login_payload)
-        # assert response.status_code == 200
+        response = session.post(site_url + login_url, data=login_payload)
+        assert response.status_code == 200
         # this is true even if user/pass is incorrect, so:
         # TODO: find a way to verify correct user/pass
 
         update_progress_bar(0)  # start progress bar
         for idx, (start, end) in enumerate(periods):
-            # period = start.strftime("Data/%b%Y_data.csv")
-            # query_string["FromDate"] = start.strftime("%m/%d/%y")
-            # query_string["ToDate"] = end.strftime("%m/%d/%y")
-            # # print(query_string, '\n')
-            #
-            # # An authorised request.
-            # response = session.get(site_url + file_url, params=query_string)
-            # assert response.status_code == 200
-            # with open(period, 'xb') as f:
-            #     f.write(response.content)
+            period = start.strftime("Data/%b%Y_data.csv")
+            query_string["FromDate"] = start.strftime("%m/%d/%Y")
+            query_string["ToDate"] = end.strftime("%m/%d/%Y")
+            # print(query_string["FromDate"], '-', query_string["ToDate"])
+
+            # An authorised request.
+            response = session.get(site_url + file_url, params=query_string)
+            assert response.status_code == 200
+            with open(period, 'xb') as f:
+                f.write(response.content)
             update_progress_bar((idx+1) / months)
     print("Data download complete. See 'Data' folder for files.")
 
