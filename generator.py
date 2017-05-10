@@ -49,6 +49,12 @@ rcParams.update({'xtick.labelsize': 'small',
                  'figure.figsize': [8/3, 2.0]})
 
 
+class InvalidDataError(Exception):
+    def __init__(self, message, tk: Tk):
+        tk.quit()
+        super().__init__(message)
+
+
 class Tenant:
     def __init__(self, unit_no, document, context):
         self.unit_no = unit_no
@@ -122,6 +128,7 @@ class Tenant:
         :type periods: OrderedDict
         :return: None
         """
+
         def autolabel(rects, axes):
             """
             Attach a text label above each bar displaying its height
@@ -205,7 +212,7 @@ class BillGenerator(Tk):
             wb = load_workbook(filename=datafile.get(), data_only=True)
             self.data = wb["DataEntry"]
             self.contacts = wb["TenantInfo"]
-            self.periods = OrderedDict((c.value, i+2) for (i, c)
+            self.periods = OrderedDict((c.value, i + 2) for (i, c)
                                        in enumerate(self.data[1][2:])
                                        if c.value is not None)
 
@@ -234,6 +241,13 @@ class BillGenerator(Tk):
                                        "with \nthe naming standard, or proceed "
                                        "with caution." % option.get(),
                                        parent=self)
+            # Check that there is at least one reading for this time period
+            readings = self.data[chr(ord('A') + self.period_index)][6:]
+            # for r in readings: print(r.value, type(r.value))
+            if all(isinstance(r.value, str) for r in readings):  # all errors
+                raise InvalidDataError("The selected billing period, " +
+                                       option.get() + ", does not "
+                                       "contain any valid readings.", self)
 
             # Add billing period to Charts and Bills folder names
             global CHARTS_DIR, BILLS_DIR
@@ -288,12 +302,15 @@ class BillGenerator(Tk):
         def initialise_tenants():
             for i, unit_row in enumerate(self.data.iter_rows(min_row=7)):
                 unit = unit_row[0].value
-                if unit is None:
+                if unit is None:  # no unit name
                     break
+                if unit_row[self.period_index] is None or \
+                        isinstance(unit_row[self.period_index].value, str):
+                    break  # no value or no valid value
                 t = Tenant(unit_no=str(unit),
                            document=DocxTemplate(self.template),
                            context=self.context)
-                contact_row = self.contacts[i+2]
+                contact_row = self.contacts[i + 2]
                 assert contact_row[0].value == unit, \
                     "Mismatch in the tenant order of DataEntry and " \
                     "TenantInfo sheets ({} != {})".format(
@@ -366,6 +383,7 @@ def _stround(num):
         return str(round(num, 2))
     else:
         return str(round(Decimal(num), 2))
+
 
 if __name__ == "__main__":
     try:
