@@ -38,6 +38,9 @@ from matplotlib import use, rcParams
 use("Agg")
 from matplotlib import pyplot
 
+
+GAL_TO_M3 = 0.00378541  # as on bill template (correct to 6 sig.fig.s)
+
 CHARTS_DIR = "Charts"
 BILLS_DIR = "Bills"
 
@@ -75,32 +78,42 @@ class Tenant:
         """
         Fills in this tenant's name and address information from
         the given row from the TenantInfo sheet of the Excel document.
+        Returns True on success.
 
         :param List[Cell] row: this tenant's row in the TenantInfo sheet
-        :return: None
+        :return: bool
         """
-        self.context['MeterNo'] = str(row[1].value)
+        if row[2].value == "Vacant":  # no actual tenant
+            return False
         self.context['Name'] = row[2].value
+        self.context['MeterNo'] = str(row[1].value)
         self.context['AccountNo'] = '-'  # not used right now, but needed for template
         self.context['ServiceAddr'] = row[3].value
         self.context['BillingAddr'] = row[7].value
         self.context['BillingCity'] = row[8].value
         self.context['BillingProv'] = row[9].value
         self.context['BillingPostal'] = row[10].value
+        return True  # all is well
 
     def calculate_bills(self, row, index):
         """
         Calculates the current bill and up to 3 previous bills
-        for this tenant.
+        for this tenant. Returns True on success.
 
         :param List[Cell] row: the Excel row for this tenant
         :param int index: the index to the current period to calculate
-        :return: None
+        :return: bool
         """
-        self.context['CRead'] = _stround(row[index].value)
-        self.context['PRead'] = _stround(row[index - 1].value)
+        # Need unit conversion:
+        self.context['CRead'] = _stround(row[index].value * GAL_TO_M3)
+        self.context['PRead'] = _stround(row[index - 1].value * GAL_TO_M3)
         self.four_recent_bills.append(Decimal(self.context['CRead']) -
                                       Decimal(self.context['PRead']))
+        if self.four_recent_bills[0] == 0:  # no consumption this period
+            return False
+        elif self.four_recent_bills[0] < 0:
+            print("Something is very wrong with unit", row[0])
+            return False
         self.context['Cons'] = Decimal(self.four_recent_bills[0] *
                                        self.context['Rate'])
         self.context['TotalDue'] = _stround(self.context['PrevBalance'] +
@@ -108,18 +121,21 @@ class Tenant:
         # Normalise to strings
         self.context['Cons'] = _stround(self.context['Cons'])
         self.context['PrevBalance'] = _stround(self.context['PrevBalance'])
-        self.context['Rate'] = _stround(self.context['Rate'])
+        self.context['Rate'] = str(self.context['Rate'])  # don't round
         self.context['AmCons'] = _stround(self.four_recent_bills[0])
 
         count = 0
         while count < 3 and index > 2:
             index -= 1
             count += 1
+            # Still need unit conversion:
             self.four_recent_bills.append(
-                Decimal(row[index].value) - Decimal(row[index - 1].value))
+                GAL_TO_M3 * (Decimal(row[index].value) -
+                             Decimal(row[index - 1].value)))
         while count < 3:
             count += 1
             self.four_recent_bills.append(0)
+        return True  # all is well
 
     def generate_chart(self, index, periods):
         """
@@ -210,7 +226,7 @@ class BillGenerator(Tk):
                                    "Please wait.")
             self.update_idletasks()
             wb = load_workbook(filename=datafile.get(), data_only=True)
-            self.data = wb["DataEntry"]
+            self.data = wb["DataFinal"]
             self.contacts = wb["TenantInfo"]
             self.periods = OrderedDict((c.value, i + 2) for (i, c)
                                        in enumerate(self.data[1][2:])
@@ -250,13 +266,11 @@ class BillGenerator(Tk):
                                        "contain any valid readings.", self)
 
             # Add billing period to Charts and Bills folder names
-            global CHARTS_DIR, BILLS_DIR
+            global CHARTS_DIR, BILLS_DIR, option
+            option = option.get().replace('- ', '-').replace(
+                ' -', '-').replace(' ', '_')  # turn "X Y - Z" into "X_Y-Z"
             CHARTS_DIR += '/' + option.get()
-            CHARTS_DIR = CHARTS_DIR.replace('- ', '-').replace(' -', '-')
-            CHARTS_DIR = CHARTS_DIR.replace(' ', '_')
             BILLS_DIR += '/' + option.get()
-            BILLS_DIR = BILLS_DIR.replace('- ', '-').replace(' -', '-')
-            BILLS_DIR = BILLS_DIR.replace(' ', '_')
 
             period_menu.grid_forget()
             message.configure(text="Please select a Word file to use\n"
@@ -303,21 +317,29 @@ class BillGenerator(Tk):
             for i, unit_row in enumerate(self.data.iter_rows(min_row=7)):
                 unit = unit_row[0].value
                 if unit is None:  # no unit name
-                    break
+                    continue
                 if unit_row[self.period_index] is None or \
                         isinstance(unit_row[self.period_index].value, str):
-                    break  # no value or no valid value
+                    print("Skipping tenant (invalid reading):", unit)
+                    continue  # no value or no valid value
                 t = Tenant(unit_no=str(unit),
                            document=DocxTemplate(self.template),
                            context=self.context)
                 contact_row = self.contacts[i + 2]
                 assert contact_row[0].value == unit, \
-                    "Mismatch in the tenant order of DataEntry and " \
+                    "Mismatch in the tenant order of DataFinal and " \
                     "TenantInfo sheets ({} != {})".format(
                         contact_row[0].value, unit)
-                t.get_addr_info(contact_row)
-                t.calculate_bills(unit_row, self.period_index)
-                self.tenants.append(t)
+                if not t.get_addr_info(contact_row):
+                    del t  # vacant
+                    print("Skipping tenant (vacant):", unit)
+                    continue
+                if not t.calculate_bills(unit_row, self.period_index):
+                    del t  # no usage
+                    print("Skipping tenant (no usage):", unit)
+                    continue
+
+                self.tenants.append(t)  # all is well
 
         def generate_charts():
             assert not exists(CHARTS_DIR), \
