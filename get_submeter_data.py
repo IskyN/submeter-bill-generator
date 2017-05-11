@@ -1,7 +1,10 @@
 from sys import stdout
+from os.path import exists, abspath
 from requests import Session
 from datetime import datetime, timedelta
 from getpass import getpass
+
+periods_path = abspath(__file__ + "/../periods.txt")
 
 site_url = "http://meterdata.submetersolutions.com"
 login_url = "/login.php"
@@ -17,35 +20,40 @@ def get_data(site_id, site_name, period=None):
 
     :param str site_id: the looked-up "SiteID" param in the data query string
     :param str site_name: the "SiteName" param in the data query string
-    :param str period: the month(s) to get data for
+    :param str|List period: the month(s) to get data for (or formatted periods)
     :return:
     """
     username = input("Username: ")
     password = getpass() if terminal else input("Enter password: ")
 
     # Get period to process (if not given)
-    period = period or input("Enter a period to get data for: ")
-    periods = []
-    months = 0
-    try:
-        if len(period) == 7:  # one month
-            start = datetime.strptime(period, "%b%Y")
-            end = last_day_of_month(start)
-            periods.append((start, end))
-            months += 1
-        else:  # a period
-            first = datetime.strptime(period[:7], "%b%Y")
-            last = datetime.strptime(period[-7:], "%b%Y")
-            months += (last.year - first.year)*12 + last.month - first.month + 1
-            start = first
-            for _ in range(months):
+    if not period or not isinstance(period, list):
+        period = period or input("Enter a period to get data for: ")
+        periods = []
+        months = 0
+        try:
+            if len(period) == 7:  # one month
+                start = datetime.strptime(period, "%b%Y")
                 end = last_day_of_month(start)
                 periods.append((start, end))
-                start = next_month(start)
-    except ValueError as e:
-        raise Exception("Incorrect period format. Accepted formats:\n"
-                        "\tJan2016         (single month)\n"
-                        "\tJan2016-Feb2017 (range of months)") from e
+                months += 1
+            else:  # a period
+                first = datetime.strptime(period[:7], "%b%Y")
+                last = datetime.strptime(period[-7:], "%b%Y")
+                months += (last.year - first.year)*12 + \
+                          (last.month - first.month + 1)
+                start = first
+                for _ in range(months):
+                    end = last_day_of_month(start)
+                    periods.append((start, end))
+                    start = next_month(start)
+        except ValueError as e:
+            raise Exception("Incorrect period format. Accepted formats:\n"
+                            "\tJan2016         (single month)\n"
+                            "\tJan2016-Feb2017 (range of months)") from e
+    else:  # properly formatted list
+        periods = period
+        months = len(periods)
 
     # print(*periods, sep="\n")
 
@@ -67,10 +75,13 @@ def get_data(site_id, site_name, period=None):
 
         update_progress_bar(0)  # start progress bar
         for idx, (start, end) in enumerate(periods):
-            period = start.strftime("Data/%b%Y_data.csv")
+            period = midpoint_day(start, end).strftime("Data/%b%Y_data.csv")
+            # Submeter Solutions uses inclusive dates, so exclude "ToDate":
+            end = end - timedelta(days=1)
             query_string["FromDate"] = start.strftime("%m/%d/%Y")
             query_string["ToDate"] = end.strftime("%m/%d/%Y")
-            # print(query_string["FromDate"], '-', query_string["ToDate"])
+            print(period, ':',
+                  query_string["FromDate"], '-', query_string["ToDate"])
 
             # An authorised request.
             response = session.get(site_url + file_url, params=query_string)
@@ -105,6 +116,24 @@ def last_day_of_month(date):
     return month_after - timedelta(days=month_after.day)
 
 
+def midpoint_day(date1, date2):
+    """
+    Finds the midpoint between two dates. (Rounds down.)
+
+    :type date1: datetime
+    :type date2: datetime
+    :return: datetime
+
+    >>> d1 = datetime(2016, 1, 1)
+    >>> d2 = datetime(2016, 1, 6)
+    >>> midpoint_day(d1, d2)
+    datetime.datetime(2016, 1, 3, 0, 0)
+    """
+    if date1 > date2:
+        date1, date2 = date2, date1
+    return (date1 + (date2 - date1) / 2).replace(hour=0)
+
+
 def update_progress_bar(percent: float):
     if not terminal:  # because PyCharm doesn't treat '\r' well
         print("[{}{}]".format('#' * int(percent * 20),
@@ -119,4 +148,14 @@ if __name__ == "__main__":
     if not terminal:
         print("WARNING: This is not a TTY/terminal. "
               "Passwords will not be hidden.")
-    get_data("128", "Brimley Plaza")
+    if exists(periods_path):
+        periods = []
+        with open(periods_path, 'r') as p:
+            for line in p:
+                first, last = line.split()
+                first = datetime.strptime(first, "%Y-%m-%d")
+                last = datetime.strptime(last, "%Y-%m-%d")
+                periods.append((first, last))
+        get_data("128", "Brimley Plaza", periods)
+    else:
+        get_data("128", "Brimley Plaza")
