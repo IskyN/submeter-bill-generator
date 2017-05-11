@@ -24,7 +24,7 @@ def get_data(site_id, site_name, period=None):
     :return:
     """
     username = input("Username: ")
-    password = getpass() if terminal else input("Enter password: ")
+    password = getpass() if terminal else input("Password: ")
 
     # Get period to process (if not given)
     if not period or not isinstance(period, list):
@@ -75,13 +75,20 @@ def get_data(site_id, site_name, period=None):
 
         update_progress_bar(0)  # start progress bar
         for idx, (start, end) in enumerate(periods):
-            period = midpoint_day(start, end).strftime("Data/%b%Y_data.csv")
+            if end - start > timedelta(days=55):  # more than 1 month
+                x = start + timedelta(days=3)  # actual month
+                y = end - timedelta(days=3)  # actual month
+                period = "{}-{}_data.csv".format(x.strftime("%b%Y"),
+                                                 y.strftime("%b%Y"))
+            else:
+                period = midpoint_day(start, end).strftime("Data/%b%Y_data.csv")
+
             # Submeter Solutions uses inclusive dates, so exclude "ToDate":
             end = end - timedelta(days=1)
             query_string["FromDate"] = start.strftime("%m/%d/%Y")
             query_string["ToDate"] = end.strftime("%m/%d/%Y")
-            print(period, ':',
-                  query_string["FromDate"], '-', query_string["ToDate"])
+            # print(period, ':',
+            #       query_string["FromDate"], '-', query_string["ToDate"])
 
             # An authorised request.
             response = session.get(site_url + file_url, params=query_string)
@@ -149,13 +156,13 @@ if __name__ == "__main__":
         print("WARNING: This is not a TTY/terminal. "
               "Passwords will not be hidden.")
     if exists(periods_path):
-        periods = []
-        with open(periods_path, 'r') as p:
-            for line in p:
-                first, last = line.split()
-                first = datetime.strptime(first, "%Y-%m-%d")
-                last = datetime.strptime(last, "%Y-%m-%d")
-                periods.append((first, last))
-        get_data("128", "Brimley Plaza", periods)
+        p = []
+        with open(periods_path, 'r') as pf:
+            for line in pf:
+                top, pot = line.split()
+                top = datetime.strptime(top, "%Y-%m-%d")
+                pot = datetime.strptime(pot, "%Y-%m-%d")
+                p.append((top, pot))
+        get_data("128", "Brimley Plaza", p)
     else:
         get_data("128", "Brimley Plaza")
