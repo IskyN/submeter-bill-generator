@@ -269,8 +269,8 @@ class BillGenerator(Tk):
             global CHARTS_DIR, BILLS_DIR, option
             option = option.get().replace('- ', '-').replace(
                 ' -', '-').replace(' ', '_')  # turn "X Y - Z" into "X_Y-Z"
-            CHARTS_DIR += '/' + option.get()
-            BILLS_DIR += '/' + option.get()
+            CHARTS_DIR += '/' + option
+            BILLS_DIR += '/' + option
 
             period_menu.grid_forget()
             message.configure(text="Please select a Word file to use\n"
