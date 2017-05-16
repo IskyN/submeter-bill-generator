@@ -39,10 +39,12 @@ use("Agg")
 from matplotlib import pyplot
 
 
-GAL_TO_M3 = 0.00378541  # as on bill template (correct to 6 sig.fig.s)
+GAL_TO_M3 = Decimal('0.00378541')  # as on bill template (correct to 6 sig figs)
 
 CHARTS_DIR = "Charts"
 BILLS_DIR = "Bills"
+
+DATA_SHEET = "DataNew"
 
 environ.setdefault("PYPANDOC_PANDOC", "C:/Program Files (x86)/Pandoc")
 getcontext().rounding = ROUND_HALF_EVEN  # so it's not locale-specific
@@ -105,14 +107,19 @@ class Tenant:
         :return: bool
         """
         # Need unit conversion:
-        self.context['CRead'] = _stround(row[index].value * GAL_TO_M3)
-        self.context['PRead'] = _stround(row[index - 1].value * GAL_TO_M3)
+        curr = row[index].value
+        prev = row[index - 1].value
+        if (isinstance(curr, str) or curr <= 0 or
+                isinstance(prev, str) or prev < 0):  # zero-value prev is ok
+            return False
+        self.context['CRead'] = _stround(Decimal(curr) * GAL_TO_M3)
+        self.context['PRead'] = _stround(Decimal(prev) * GAL_TO_M3)
         self.four_recent_bills.append(Decimal(self.context['CRead']) -
                                       Decimal(self.context['PRead']))
         if self.four_recent_bills[0] == 0:  # no consumption this period
             return False
         elif self.four_recent_bills[0] < 0:
-            print("Something is very wrong with unit", row[0])
+            print("Something is very wrong with unit", row[0].value)
             return False
         self.context['Cons'] = Decimal(self.four_recent_bills[0] *
                                        self.context['Rate'])
@@ -121,20 +128,27 @@ class Tenant:
         # Normalise to strings
         self.context['Cons'] = _stround(self.context['Cons'])
         self.context['PrevBalance'] = _stround(self.context['PrevBalance'])
-        self.context['Rate'] = str(self.context['Rate'])  # don't round
+        self.context['Rate'] = str(round(self.context['Rate'], 4))  # different rounding than _stround
         self.context['AmCons'] = _stround(self.four_recent_bills[0])
 
         count = 0
+        index -= 1
+        # print(index)
         while count < 3 and index > 2:
             index -= 1
-            count += 1
+            curr = prev
+            prev = row[index].value
+            # print(index, curr, prev)
+            if isinstance(prev, str) or prev < 0:  # zero values are ok
+                break  # don't try to add any more columns to the graph
             # Still need unit conversion:
             self.four_recent_bills.append(
-                GAL_TO_M3 * (Decimal(row[index].value) -
-                             Decimal(row[index - 1].value)))
-        while count < 3:
+                GAL_TO_M3 * (Decimal(curr) - Decimal(prev)))
             count += 1
-            self.four_recent_bills.append(0)
+        while count < 3:  # fill out the 4 column spaces
+            self.four_recent_bills.append(Decimal(0))
+            count += 1
+        # print(row[0].value, ":", *self.four_recent_bills, sep=", ")
         return True  # all is well
 
     def generate_chart(self, index, periods):
@@ -157,10 +171,10 @@ class Tenant:
                 if height > 0:
                     label_position = height + (y_height * 0.05)
                     axes.text(rect.get_x() + rect.get_width() / 2.,
-                              label_position, str(int(height)),
+                              label_position, str(round(height, 2)),
                               ha='center', va='bottom')
 
-        bills = [round(b) for b in self.four_recent_bills[::-1]]  # reverse
+        bills = self.four_recent_bills[::-1]  # reverse
         rng = range(4)
         fig, ax = pyplot.subplots()  # type: Figure, Axes
 
@@ -222,11 +236,11 @@ class BillGenerator(Tk):
 
         def read_data_file(*args):
             ok_button.pack_forget()
-            message.configure(text="Data file open and reading. "
+            message.configure(text="Data file open and reading.\n"
                                    "Please wait.")
             self.update_idletasks()
             wb = load_workbook(filename=datafile.get(), data_only=True)
-            self.data = wb["DataFinal"]
+            self.data = wb[DATA_SHEET]
             self.contacts = wb["TenantInfo"]
             self.periods = OrderedDict((c.value, i + 2) for (i, c)
                                        in enumerate(self.data[1][2:])
@@ -246,6 +260,7 @@ class BillGenerator(Tk):
             ok_button.pack(pady=10, padx=10)
 
         def select_period(*args):
+            nonlocal option
             self.period_index = self.periods[option.get()]
             if any(len(x) > 10 for x in wrap(option.get(), 10)):
                 messagebox.showwarning("Format Warning",
@@ -266,7 +281,7 @@ class BillGenerator(Tk):
                                        "contain any valid readings.", self)
 
             # Add billing period to Charts and Bills folder names
-            global CHARTS_DIR, BILLS_DIR, option
+            global CHARTS_DIR, BILLS_DIR
             option = option.get().replace('- ', '-').replace(
                 ' -', '-').replace(' ', '_')  # turn "X Y - Z" into "X_Y-Z"
             CHARTS_DIR += '/' + option
@@ -321,15 +336,15 @@ class BillGenerator(Tk):
                 if unit_row[self.period_index] is None or \
                         isinstance(unit_row[self.period_index].value, str):
                     print("Skipping tenant (invalid reading):", unit)
-                    continue  # no value or no valid value
+                    continue  # no value or invalid value
                 t = Tenant(unit_no=str(unit),
                            document=DocxTemplate(self.template),
                            context=self.context)
                 contact_row = self.contacts[i + 2]
                 assert contact_row[0].value == unit, \
-                    "Mismatch in the tenant order of DataFinal and " \
+                    "Mismatch in the tenant order of {} and " \
                     "TenantInfo sheets ({} != {})".format(
-                        contact_row[0].value, unit)
+                        DATA_SHEET, contact_row[0].value, unit)
                 if not t.get_addr_info(contact_row):
                     del t  # vacant
                     print("Skipping tenant (vacant):", unit)

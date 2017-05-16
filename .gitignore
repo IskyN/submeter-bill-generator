@@ -5,5 +5,10 @@
 Bills/
 Charts/
 
-# get_submeter_data result folder
+# get_submeter_data result(s) folder
 Data/
+Data_*/
+
+# VIM backup files
+*~
+
