@@ -41,10 +41,10 @@ from matplotlib import pyplot
 
 GAL_TO_M3 = Decimal('0.00378541')  # as on bill template (correct to 6 sig figs)
 
-CHARTS_DIR = "Charts"
-BILLS_DIR = "Bills"
+charts_dir = "Charts"
+bills_dir = "Bills"
 
-DATA_SHEET = "DataNew"
+data_sheet = "DataNewest"
 
 environ.setdefault("PYPANDOC_PANDOC", "C:/Program Files (x86)/Pandoc")
 getcontext().rounding = ROUND_HALF_EVEN  # so it's not locale-specific
@@ -65,9 +65,9 @@ class Tenant:
         self.unit_no = unit_no
         self.document = document
         self.context = context.copy()  # shallow copy is enough (no mutable values)
-        self.chart_path = "{}/unit_{}_history.png".format(CHARTS_DIR, self.unit_no)
+        self.chart_path = "{}/unit_{}_history.png".format(charts_dir, self.unit_no)
         self.bill_path = "{}/unit_{}_{}_bill.docx".format(
-            BILLS_DIR, self.unit_no, BILLS_DIR[6:])  # formatted period-name
+            bills_dir, self.unit_no, bills_dir[6:])  # formatted period-name
 
         self.four_recent_bills = []  # type: [Decimal]
 
@@ -240,7 +240,7 @@ class BillGenerator(Tk):
                                    "Please wait.")
             self.update_idletasks()
             wb = load_workbook(filename=datafile.get(), data_only=True)
-            self.data = wb[DATA_SHEET]
+            self.data = wb[data_sheet]
             self.contacts = wb["TenantInfo"]
             self.periods = OrderedDict((c.value, i + 2) for (i, c)
                                        in enumerate(self.data[1][2:])
@@ -281,11 +281,11 @@ class BillGenerator(Tk):
                                        "contain any valid readings.", self)
 
             # Add billing period to Charts and Bills folder names
-            global CHARTS_DIR, BILLS_DIR
+            global charts_dir, bills_dir
             option = option.get().replace('- ', '-').replace(
                 ' -', '-').replace(' ', '_')  # turn "X Y - Z" into "X_Y-Z"
-            CHARTS_DIR += '/' + option
-            BILLS_DIR += '/' + option
+            charts_dir += '/' + option
+            bills_dir += '/' + option
 
             period_menu.grid_forget()
             message.configure(text="Please select a Word file to use\n"
@@ -344,7 +344,7 @@ class BillGenerator(Tk):
                 assert contact_row[0].value == unit, \
                     "Mismatch in the tenant order of {} and " \
                     "TenantInfo sheets ({} != {})".format(
-                        DATA_SHEET, contact_row[0].value, unit)
+                        data_sheet, contact_row[0].value, unit)
                 if not t.get_addr_info(contact_row):
                     del t  # vacant
                     print("Skipping tenant (vacant):", unit)
@@ -357,16 +357,16 @@ class BillGenerator(Tk):
                 self.tenants.append(t)  # all is well
 
         def generate_charts():
-            assert not exists(CHARTS_DIR), \
-                "'{}' folder already exists.".format(CHARTS_DIR)
-            makedirs(CHARTS_DIR)
+            assert not exists(charts_dir), \
+                "'{}' folder already exists.".format(charts_dir)
+            makedirs(charts_dir)
             for tenant in self.tenants:
                 tenant.generate_chart(self.period_index, self.periods)
 
         def generate_bills():
-            assert not exists(BILLS_DIR), \
-                "'{}' folder already exists.".format(BILLS_DIR)
-            makedirs(BILLS_DIR)
+            assert not exists(bills_dir), \
+                "'{}' folder already exists.".format(bills_dir)
+            makedirs(bills_dir)
             for tenant in self.tenants:
                 tenant.generate_bill()
 
@@ -382,7 +382,7 @@ class BillGenerator(Tk):
             almost_close()
 
         def almost_close():
-            path = abspath(BILLS_DIR)
+            path = abspath(bills_dir)
             message.configure(text="Bill generation complete!\n"
                                    "Bills have been stored in \n%s.\n"
                                    "Press Open Folder to open this folder \n"
@@ -413,13 +413,11 @@ def _stround(num):
     """
     Round num to two decimal places and return as a string.
 
-    :type num: Decimal | Any
+    :type num: Decimal
     :return: str
     """
-    if isinstance(num, Decimal):
-        return str(round(num, 2))
-    else:
-        return str(round(Decimal(num), 2))
+    assert isinstance(num, Decimal), "Not a Decimal type"
+    return str(round(Decimal(num), 2))
 
 
 if __name__ == "__main__":
@@ -427,8 +425,8 @@ if __name__ == "__main__":
         root = BillGenerator()
         root.mainloop()
     except Exception as e:
-        if exists(CHARTS_DIR) and not listdir(CHARTS_DIR):
-            rmdir(CHARTS_DIR)
-        if exists(BILLS_DIR) and not listdir(BILLS_DIR):
-            rmdir(BILLS_DIR)
+        if exists(charts_dir) and not listdir(charts_dir):
+            rmdir(charts_dir)
+        if exists(bills_dir) and not listdir(bills_dir):
+            rmdir(bills_dir)
         raise e
