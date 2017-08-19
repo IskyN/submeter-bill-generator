@@ -3,7 +3,9 @@
 
 # submeter-bill-generator result folders
 Bills/
+Bills_*/
 Charts/
+Charts_*/
 
 # get_submeter_data result(s) folder
 Data/

@@ -18,7 +18,7 @@ as a utility bill template, and produce bills for every tenant for the
 selected billing period.
 """
 
-from os import environ, makedirs, listdir, rmdir
+from os import environ, makedirs
 from os.path import exists, abspath
 from subprocess import run
 
@@ -44,7 +44,7 @@ GAL_TO_M3 = Decimal('0.00378541')  # as on bill template (correct to 6 sig figs)
 charts_dir = "Charts"
 bills_dir = "Bills"
 
-data_sheet = "DataNewest"
+data_sheet = "DataEntry"  # which data sheet to use
 
 environ.setdefault("PYPANDOC_PANDOC", "C:/Program Files (x86)/Pandoc")
 getcontext().rounding = ROUND_HALF_EVEN  # so it's not locale-specific
@@ -69,6 +69,11 @@ class Tenant:
         self.bill_path = "{}/unit_{}_{}_bill.docx".format(
             bills_dir, self.unit_no, bills_dir[6:])  # formatted period-name
 
+        assert not exists(self.chart_path), \
+            "'{}' image already exists.".format(self.chart_path)
+        assert not exists(self.bill_path), \
+            "'{}' document already exists.".format(self.bill_path)
+
         self.four_recent_bills = []  # type: [Decimal]
 
         self.context['CRead'] = self.context['PRead'] = None
@@ -80,14 +85,28 @@ class Tenant:
         """
         Fills in this tenant's name and address information from
         the given row from the TenantInfo sheet of the Excel document.
-        Returns True on success.
+        Returns True on success. Return False on units without meter numbers.
 
         :param List[Cell] row: this tenant's row in the TenantInfo sheet
         :return: bool
         """
-        if row[2].value == "Vacant":  # no actual tenant
+        if not row[1].value:  # no water meter on this unit
             return False
-        self.context['Name'] = row[2].value
+        # Remove numeration for units with more than one water meter
+        name_tokens = row[2].value.rsplit(maxsplit=1)
+        if name_tokens[1][0] == "{" and name_tokens[1][-1] == "}":
+            try:
+                x = str(name_tokens[1][1:-1])  # test if number b/w {}
+            except ValueError:  # not an int
+                self.context['BillingName'] = row[2].value
+            else:
+                # so name ends in "{##}", which is my numeration (to be ignored)
+                self.context['BillingName'] = name_tokens[0]
+        else:
+            self.context['BillingName'] = row[2].value
+        self.context['Name'] = row[2].value  # preserve numeration if exists
+        if row[11].value == "VACANT":  # check "Move-In Date"
+            self.context['Name'] += " (vacant)"
         self.context['MeterNo'] = str(row[1].value)
         self.context['AccountNo'] = '-'  # not used right now, but needed for template
         self.context['ServiceAddr'] = row[3].value
@@ -95,7 +114,7 @@ class Tenant:
         self.context['BillingCity'] = row[8].value
         self.context['BillingProv'] = row[9].value
         self.context['BillingPostal'] = row[10].value
-        return True  # all is well
+        return True  # all is well - treat Vacant as almost-normal
 
     def calculate_bills(self, row, index):
         """
@@ -106,20 +125,22 @@ class Tenant:
         :param int index: the index to the current period to calculate
         :return: bool
         """
-        # Need unit conversion:
         curr = row[index].value
         prev = row[index - 1].value
-        if (isinstance(curr, str) or curr <= 0 or
-                isinstance(prev, str) or prev < 0):  # zero-value prev is ok
-            return False
-        self.context['CRead'] = _stround(Decimal(curr) * GAL_TO_M3)
-        self.context['PRead'] = _stround(Decimal(prev) * GAL_TO_M3)
+        if (curr is None or isinstance(curr, str) or curr <= 0 or
+                prev is None or isinstance(prev, str) or prev <= 0):
+            curr = prev = '0.00'  # produce bill, but with zero-values
+            self.context['CRead'] = Decimal(curr)
+            self.context['PRead'] = Decimal(prev)
+        else:
+            # Need unit conversion:
+            self.context['CRead'] = _stround(Decimal(curr) * GAL_TO_M3)
+            self.context['PRead'] = _stround(Decimal(prev) * GAL_TO_M3)
         self.four_recent_bills.append(Decimal(self.context['CRead']) -
                                       Decimal(self.context['PRead']))
-        if self.four_recent_bills[0] == 0:  # no consumption this period
-            return False
-        elif self.four_recent_bills[0] < 0:
-            print("Something is very wrong with unit", row[0].value)
+
+        if self.four_recent_bills[0] < 0:
+            print("Something is wrong with unit", row[0].value, "(skipping)")
             return False
         self.context['Cons'] = Decimal(self.four_recent_bills[0] *
                                        self.context['Rate'])
@@ -139,14 +160,14 @@ class Tenant:
             curr = prev
             prev = row[index].value
             # print(index, curr, prev)
-            if isinstance(prev, str) or prev < 0:  # zero values are ok
+            if isinstance(prev, str):  # or prev < 0:  # zero values are ok
                 break  # don't try to add any more columns to the graph
             # Still need unit conversion:
             self.four_recent_bills.append(
-                GAL_TO_M3 * (Decimal(curr) - Decimal(prev)))
+                round(GAL_TO_M3 * (Decimal(curr) - Decimal(prev)), 2))
             count += 1
         while count < 3:  # fill out the 4 column spaces
-            self.four_recent_bills.append(Decimal(0))
+            self.four_recent_bills.append(Decimal('0.00'))
             count += 1
         # print(row[0].value, ":", *self.four_recent_bills, sep=", ")
         return True  # all is well
@@ -195,7 +216,8 @@ class Tenant:
         ax.spines['right'].set_visible(False)
 
         chart = ax.bar(rng, bills, 1/1.5, color="blue")
-        chart[3].set_color("cyan")
+        if chart[3].get_height() > 0:
+            chart[3].set_color("cyan")  # to prevent ghost line on empty bars
         autolabel(chart, ax)
         fig.subplots_adjust(bottom=0.4)
         fig.savefig(self.chart_path)
@@ -329,43 +351,36 @@ class BillGenerator(Tk):
             self.context['DueDate'] = period[5].value.strftime("%b %d/%y")
 
         def initialise_tenants():
-            for i, unit_row in enumerate(self.data.iter_rows(min_row=7)):
+            for row_idx, unit_row in enumerate(self.data.iter_rows(min_row=7)):
                 unit = unit_row[0].value
                 if unit is None:  # no unit name
-                    continue
-                if unit_row[self.period_index] is None or \
-                        isinstance(unit_row[self.period_index].value, str):
-                    print("Skipping tenant (invalid reading):", unit)
-                    continue  # no value or invalid value
+                    continue  # TODO: break?
                 t = Tenant(unit_no=str(unit),
                            document=DocxTemplate(self.template),
                            context=self.context)
-                contact_row = self.contacts[i + 2]
+
+                # Verify valid, water-using unit
+                contact_row = self.contacts[row_idx + 2]
                 assert contact_row[0].value == unit, \
                     "Mismatch in the tenant order of {} and " \
                     "TenantInfo sheets ({} != {})".format(
                         data_sheet, contact_row[0].value, unit)
                 if not t.get_addr_info(contact_row):
-                    del t  # vacant
-                    print("Skipping tenant (vacant):", unit)
+                    del t  # no meter
+                    print("Skipping tenant (unmetered):", unit)
                     continue
                 if not t.calculate_bills(unit_row, self.period_index):
-                    del t  # no usage
-                    print("Skipping tenant (no usage):", unit)
+                    del t  # error
                     continue
 
                 self.tenants.append(t)  # all is well
 
         def generate_charts():
-            assert not exists(charts_dir), \
-                "'{}' folder already exists.".format(charts_dir)
             makedirs(charts_dir)
             for tenant in self.tenants:
                 tenant.generate_chart(self.period_index, self.periods)
 
         def generate_bills():
-            assert not exists(bills_dir), \
-                "'{}' folder already exists.".format(bills_dir)
             makedirs(bills_dir)
             for tenant in self.tenants:
                 tenant.generate_bill()
@@ -425,8 +440,5 @@ if __name__ == "__main__":
         root = BillGenerator()
         root.mainloop()
     except Exception as e:
-        if exists(charts_dir) and not listdir(charts_dir):
-            rmdir(charts_dir)
-        if exists(bills_dir) and not listdir(bills_dir):
-            rmdir(bills_dir)
+        # remove folder-deletion (check individual files instead)
         raise e

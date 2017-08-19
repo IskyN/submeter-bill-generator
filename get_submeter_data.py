@@ -1,4 +1,5 @@
 from sys import stdout
+from os import makedirs
 from os.path import exists, abspath
 from requests import Session
 from datetime import datetime, timedelta
@@ -23,9 +24,6 @@ def get_data(site_id, site_name, period=None):
     :param str|List period: the month(s) to get data for (or formatted periods)
     :return:
     """
-    username = input("Username: ")
-    password = getpass() if terminal else input("Password: ")
-
     # Get period to process (if not given)
     if not period or not isinstance(period, list):
         period = period or input("Enter a period to get data for: ")
@@ -56,6 +54,11 @@ def get_data(site_id, site_name, period=None):
         months = len(periods)
 
     # print(*periods, sep="\n")
+    if not exists("Data"):
+        makedirs("Data")
+
+    username = input("Username: ")
+    password = getpass() if terminal else input("Password: ")
 
     # (Thanks to tigerFinch @ http://stackoverflow.com/a/17633072)
     # Fill in your details here to be posted to the login form.
@@ -69,9 +72,10 @@ def get_data(site_id, site_name, period=None):
     # Use 'with' to ensure the session context is closed after use.
     with Session() as session:
         response = session.post(site_url + login_url, data=login_payload)
-        assert response.status_code == 200
-        # this is true even if user/pass is incorrect, so:
-        # TODO: find a way to verify correct user/pass
+        assert response.status_code == 200, "Error from data server"
+        # print("url: {}".format(response.url))
+        assert response.url == site_url + "/propertylist.php", \
+            "Incorrect username/password"
 
         update_progress_bar(0)  # start progress bar
         for idx, (start, end) in enumerate(periods):
@@ -83,7 +87,7 @@ def get_data(site_id, site_name, period=None):
             else:
                 period = midpoint_day(start, end).strftime("Data/%b%Y_data.csv")
 
-            # Submeter Solutions uses inclusive dates, so exclude "ToDate":
+            # Submeter Solutions uses inclusive dates, but City doesn't, so exclude "ToDate":
             end = end - timedelta(days=1)
             query_string["FromDate"] = start.strftime("%m/%d/%Y")
             query_string["ToDate"] = end.strftime("%m/%d/%Y")
@@ -92,7 +96,7 @@ def get_data(site_id, site_name, period=None):
 
             # An authorised request.
             response = session.get(site_url + file_url, params=query_string)
-            assert response.status_code == 200
+            assert response.status_code == 200, "Error from data server"
             with open(period, 'xb') as f:
                 f.write(response.content)
             update_progress_bar((idx+1) / months)
@@ -155,14 +159,16 @@ if __name__ == "__main__":
     if not terminal:
         print("WARNING: This is not a TTY/terminal. "
               "Passwords will not be hidden.")
-    if exists(periods_path):
+    if periods_path and exists(periods_path):
         p = []
         with open(periods_path, 'r') as pf:
             for line in pf:
-                top, pot = line.split()
-                top = datetime.strptime(top, "%Y-%m-%d")
-                pot = datetime.strptime(pot, "%Y-%m-%d")
-                p.append((top, pot))
+                if line[0] != '#':                  # skip comment lines
+                    top, pot = line.split()[:2]     # ignore inline comments
+                    top = datetime.strptime(top, "%Y-%m-%d")
+                    pot = datetime.strptime(pot, "%Y-%m-%d")
+                    assert top < pot, "Improper period range (start !< end)"
+                    p.append((top, pot))
         get_data("128", "Brimley Plaza", p)
     else:
         get_data("128", "Brimley Plaza")

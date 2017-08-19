@@ -2,7 +2,8 @@
 ' http://mydailyjava.blogspot.ca/2013/05/converting-microsoft-doc-or-docx-files.html
 
 ' See http://msdn2.microsoft.com/en-us/library/bb238158.aspx
-Const wdFormatPDF = 17  ' PDF format. 
+Const wdExportFormatPDF = 17  ' PDF format
+Const wdExportOptimizeForPrint = 0  ' high quality 
 
 Const WdDoNotSaveChanges = 0
  
@@ -22,6 +23,8 @@ End Function
  
 ' Transforms a doc to a pdf
 Function DocToPdf( docInputFile, pdfOutputFile )
+  
+  ''WScript.Echo "Hi"
  
   Dim fileSystemObject
   Dim wordApplication
@@ -41,20 +44,31 @@ Function DocToPdf( docInputFile, pdfOutputFile )
   If Len(fileSystemObject.GetParentFolderName(pdfOutputFile)) = 0 Then
     pdfOutputFile = baseFolder + "\" + pdfOutputFile
   End If
+  
+  ''WScript.Echo "Almost Ready"
  
   ' Disable any potential macros of the word document.
   wordApplication.WordBasic.DisableAutoMacros
+  
+  ''WScript.Echo "Ready"
  
   Set wordDocument = wordApplication.Documents.Open(docInputFile)
+  
+  ''WScript.Echo "Opened"
  
   ' See http://msdn2.microsoft.com/en-us/library/bb221597.aspx 
-  wordDocument.SaveAs pdfOutputFile, wdFormatPDF
+  wordDocument.ExportAsFixedFormat _ 
+    pdfOutputFile, wdExportFormatPDF, , wdExportOptimizeForPrint
+  
+  ''WScript.Echo "PDFed"
  
   wordDocument.Close WdDoNotSaveChanges
   wordApplication.Quit WdDoNotSaveChanges
-   
+ 
   Set wordApplication = Nothing
   Set fileSystemObject = Nothing
+  
+  ''WScript.Echo "Done! PDF created at: " + pdfOutputFile
  
 End Function
  
@@ -65,5 +79,6 @@ If arguments.Unnamed.Count = 2 Then
 Else
  Call DocToPdf( arguments.Unnamed.Item(0), "" )
 End If
- 
+
 Set arguments = Nothing
+
