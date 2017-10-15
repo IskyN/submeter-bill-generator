@@ -27,8 +27,6 @@ This program suite is designed to speed up the process of producing beautifully-
 ## Word Document Tags
 These tags in the Word document should be enclosed in double brace brackets, like this: `{{ TagName }}`
 
-### Needed Tags
-
 * ServiceAddr (submeter address including unit number)
 * Name (tenant name)
 * PrevBalance (previous bill balance)
@@ -45,8 +43,5 @@ These tags in the Word document should be enclosed in double brace brackets, lik
 * BillingName (name of person/company receiving bill)
 * BillingAddr, BillingCity, BillingProv, BillingPostal (address info of person/company receiving bill)
 * DueDate (when this bill is due)
-
-### Optional Tags
-
 * AccountNo (account number)
 * Chart (used for a Matplotlib image file of recent months' usage)
