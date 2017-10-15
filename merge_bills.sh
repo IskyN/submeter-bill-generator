@@ -1,6 +1,9 @@
 #!/bin/bash
+#
+# Combine each month's set of bills into one PDF. Optional argument: folder of month to combine.
+# Must run in 'submeter-bill-generator' folder.
 
-if [ "`pwd`" != "/mnt/c/Users/nisky/Desktop/Pact & Comfort Care Stuff/Pact Submeter Bills/submeter-bill-generator" ]; then
+if [ "`basename \"\`pwd\`\"`" != "submeter-bill-generator" ]; then
     echo "Current directory is not 'submeter-bill-generator'"
     exit 1
 fi
