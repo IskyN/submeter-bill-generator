@@ -7,7 +7,7 @@ This program suite is designed to speed up the process of producing beautifully-
   2. (Graphical interface) Calculates water usage and amount owed from the given Excel document 
      (which includes downloaded data, tenant information, and monthly rate in dollars). Currently only processes one month at a time.
   3. GUI also takes a Microsoft Word (2007 or later) template, with [jinja2-style tags](http://docxtpl.readthedocs.io/en/latest/#jinja2-like-syntax), 
-     which is used to generate the final bills. (See [Needed Tags](#needed-tags) below.)
+     which is used to generate the final bills. (See [below](#word-document-tags).)
   4. You may want to run [merge_bills.sh](merge_bills.sh) on the resulting PDF files to merge them, 
      because there is one PDF produced for each tenant. You can use the bash script (or other PDF editor) to merge a 
      month's worth of bill PDFs into one PDF.
